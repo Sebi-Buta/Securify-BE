@@ -74,19 +74,48 @@ app.post("/api/login-vulnerable", async (req: Request<{}, {}, LoginRequest>, res
 
 // B. Ruta SECURIZATĂ (Apărare)
 app.post("/api/login-secure", async (req: Request<{}, {}, LoginRequest>, res: Response): Promise<void> => {
+	// 1. Preluăm datele trimise din interfața React
 	const { username, password } = req.body;
+
+	// Verificăm dacă a introdus ambele câmpuri
+	if (!username || !password) {
+		res.status(400).json({ success: false, message: "Te rog introdu user și parolă." });
+		return;
+	}
 
 	try {
 		const connection = await mysql.createConnection(dbConfig);
-		const query = `SELECT * FROM users WHERE username = ? AND password = ?`;
 
-		const [rows] = await connection.execute<RowDataPacket[]>({ sql: query, values: [username, password] });
+		// 2. CĂUTĂM DOAR DUPĂ USERNAME (Nu verificăm parola în SQL)
+		const query = `SELECT * FROM users WHERE username = ?`;
+		const [rows] = await connection.execute<RowDataPacket[]>(query, [username]);
 		await connection.end();
 
+		// Verificăm dacă userul există în baza de date
 		if (rows.length > 0) {
-			res.json({ success: true, message: "Autentificare reușită!", user: rows[0] });
+			const user = rows[0]; // Extragem datele userului găsit
+
+			// 3. MAGIA: Lăsăm bcrypt să compare parola scrisă cu Hash-ul din DB
+			// 'password' e ce a scris omul, 'user.password' e hash-ul stocat
+			const match = await bcrypt.compare(password, user?.password);
+
+			if (match) {
+				// Parola este corectă!
+				// Best practice: Nu trimite parola înapoi către frontend
+				const { password: _, ...userWithoutPassword }: any = user;
+
+				res.json({
+					success: true,
+					message: "Autentificare reușită!",
+					user: userWithoutPassword,
+				});
+			} else {
+				// Parola este greșită
+				res.status(401).json({ success: false, message: "Parolă incorectă." });
+			}
 		} else {
-			res.status(401).json({ success: false, message: "User sau parolă incorecte." });
+			// Userul nu a fost găsit deloc
+			res.status(401).json({ success: false, message: "Acest user nu există." });
 		}
 	} catch (error: any) {
 		res.status(500).json({ error: error.message });
