@@ -7,8 +7,8 @@
 
 		// Environment Settings
 		// See also https://aka.ms/tsconfig/module
-		"module": "NodeNext",
-		"moduleResolution": "NodeNext",
+		"module": "NodeNext", // <-- Esențial pentru Node.js modern
+		"moduleResolution": "NodeNext", // <-- Esențial
 		"verbatimModuleSyntax": true,
 		"target": "esnext",
 		"types": [],
