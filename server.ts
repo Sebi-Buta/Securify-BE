@@ -1,80 +1,69 @@
 import express, { type Request, type Response } from "express";
 import cors from "cors";
-import mongoose, { Schema, Document } from "mongoose";
+import mysql, { type RowDataPacket } from "mysql2/promise";
+import { type ResultSetHeader } from "mysql2";
 import bcrypt from "bcrypt";
 
 const app = express();
 
 app.use(cors());
-// Permitem Express să citească JSON (acest lucru e esențial pentru NoSQL Injection)
 app.use(express.json());
 
 // ---------------------------------------------------------
-// 1. CONEXIUNEA LA MONGODB
-// ---------------------------------------------------------
-const mongoURI = "mongodb+srv://seblaur09_db_user:SecurifyPassword@securify.nwtmqgu.mongodb.net/?appName=Securify";
-
-mongoose.connect(mongoURI)
-	.then(() => console.log("🟢 Conectat cu succes la MongoDB!"))
-	.catch((err) => console.error("🔴 Eroare la conectarea MongoDB:", err));
-
-// ---------------------------------------------------------
-// 2. DEFINIREA SCHEMELOR MONGODB (Modele & Interfețe TS)
+// DEFINIREA TIPURILOR DE DATE (Interfețe)
+// Asta arată comisiei că știi arhitectură software!
 // ---------------------------------------------------------
 
-// A. Modelul pentru User
-interface IUser extends Document {
-	username: string;
-	password?: string; // Aici va sta hash-ul
-	role: string;
+interface LoginRequest {
+	username?: string;
+	password?: string;
 }
 
-const UserSchema = new Schema<IUser>({
-	username: { type: String, required: true, unique: true },
-	password: { type: String, required: true },
-	role: { type: String, default: "user" },
-});
-const UserModel = mongoose.model<IUser>("User", UserSchema);
-
-// B. Modelul pentru Comentarii (XSS)
-interface IComment extends Document {
-	author: string;
-	content: string;
-	createdAt: Date;
+interface CommentRequest {
+	author?: string;
+	content?: string;
 }
 
-const CommentSchema = new Schema<IComment>({
-	author: { type: String, required: true },
-	content: { type: String, required: true },
-	createdAt: { type: Date, default: Date.now },
-});
-const CommentModel = mongoose.model<IComment>("Comment", CommentSchema);
+interface UserRequest {
+	username?: string;
+	password?: string;
+}
+
+// ---------------------------------------------------------
+// CONEXIUNEA LA BAZA DE DATE
+// ---------------------------------------------------------
+const dbConfig: mysql.ConnectionOptions = {
+	host: "localhost",
+	user: "root",
+	password: "",
+	database: "securify_db",
+};
 
 // ---------------------------------------------------------
 // PASUL 1: RUTA DE STATUS
 // ---------------------------------------------------------
 app.get("/api/status", (req: Request, res: Response) => {
-	res.json({ message: "Serverul TS+MongoDB este online!" });
+	res.json({ message: "Serverul TS este online și gata de atac/apărare!" });
 });
 
 // ---------------------------------------------------------
-// PASUL 2: NoSQL INJECTION (Autentificare)
+// PASUL 2: SQL INJECTION (Autentificare)
 // ---------------------------------------------------------
 
-// A. Ruta VULNERABILĂ (Atac NoSQLi)
-app.post("/api/login-vulnerable", async (req: Request, res: Response): Promise<void> => {
+// A. Ruta VULNERABILĂ (Atac)
+app.post("/api/login-vulnerable", async (req: Request<{}, {}, LoginRequest>, res: Response): Promise<void> => {
+	const { username, password } = req.body;
+
 	try {
-		// GRAV: Trimitem direct req.body.username în baza de date.
-		// Dacă atacatorul trimite { "username": {"$ne": null}, "password": {"$ne": null} },
-		// MongoDB va evalua asta ca fiind ADEVĂRAT și va returna primul user (adminul)!
+		const connection = await mysql.createConnection(dbConfig);
+		const query = `SELECT * FROM users WHERE username = '${username}' AND password = '${password}'`;
 
-		const user = await UserModel.findOne({
-			username: req.body.username,
-			password: req.body.password,
-		});
+		// <RowDataPacket[]> îi spune lui TS ce fel de date returnează baza de date
+		const [rows] = await connection.execute<RowDataPacket[]>(query);
+		await connection.end();
 
-		if (user) {
-			res.json({ success: true, message: "HACKED! Autentificare reușită!", user });
+		if (rows.length > 0) {
+			res.json({ success: true, message: "Autentificare reușită!", user: rows[0] });
 		} else {
 			res.status(401).json({ success: false, message: "User sau parolă incorecte." });
 		}
@@ -84,37 +73,49 @@ app.post("/api/login-vulnerable", async (req: Request, res: Response): Promise<v
 });
 
 // B. Ruta SECURIZATĂ (Apărare)
-app.post("/api/login-secure", async (req: Request, res: Response): Promise<void> => {
+app.post("/api/login-secure", async (req: Request<{}, {}, LoginRequest>, res: Response): Promise<void> => {
+	// 1. Preluăm datele trimise din interfața React
+	const { username, password } = req.body;
+
+	// Verificăm dacă a introdus ambele câmpuri
+	if (!username || !password) {
+		res.status(400).json({ success: false, message: "Te rog introdu user și parolă." });
+		return;
+	}
+
 	try {
-		// CORECT: Forțăm datele să fie de tip String.
-		// Dacă un hacker trimite un obiect {"$ne": null}, String() îl va transforma în textul "[object Object]",
-		// distrugând astfel atacul NoSQLi.
-		const safeUsername = String(req.body.username);
-		const safePassword = String(req.body.password);
+		const connection = await mysql.createConnection(dbConfig);
 
-		if (!safeUsername || !safePassword) {
-			res.status(400).json({ success: false, message: "Te rog introdu datele." });
-			return;
-		}
+		// 2. CĂUTĂM DOAR DUPĂ USERNAME (Nu verificăm parola în SQL)
+		const query = `SELECT * FROM users WHERE username = ?`;
+		const [rows] = await connection.execute<RowDataPacket[]>(query, [username]);
+		await connection.end();
 
-		// Căutăm doar după username
-		const user = await UserModel.findOne({ username: safeUsername });
+		// Verificăm dacă userul există în baza de date
+		if (rows.length > 0) {
+			const user = rows[0]; // Extragem datele userului găsit
 
-		if (user) {
-			// Verificăm parola cu bcrypt
-			const match = await bcrypt.compare(safePassword, user.password || "");
+			// 3. MAGIA: Lăsăm bcrypt să compare parola scrisă cu Hash-ul din DB
+			// 'password' e ce a scris omul, 'user.password' e hash-ul stocat
+			const match = await bcrypt.compare(password, user?.password);
 
 			if (match) {
-				// Nu returnăm parola hash-uită către frontend
-				const userObj = user.toObject();
-				delete userObj.password;
+				// Parola este corectă!
+				// Best practice: Nu trimite parola înapoi către frontend
+				const { password: _, ...userWithoutPassword }: any = user;
 
-				res.json({ success: true, message: "Autentificare sigură reușită!", user: userObj });
+				res.json({
+					success: true,
+					message: "Autentificare reușită!",
+					user: userWithoutPassword,
+				});
 			} else {
+				// Parola este greșită
 				res.status(401).json({ success: false, message: "Parolă incorectă." });
 			}
 		} else {
-			res.status(401).json({ success: false, message: "Userul nu există." });
+			// Userul nu a fost găsit deloc
+			res.status(401).json({ success: false, message: "Acest user nu există." });
 		}
 	} catch (error: any) {
 		res.status(500).json({ error: error.message });
@@ -124,12 +125,17 @@ app.post("/api/login-secure", async (req: Request, res: Response): Promise<void>
 // ---------------------------------------------------------
 // PASUL 3: CROSS-SITE SCRIPTING (Comentarii)
 // ---------------------------------------------------------
-app.post("/api/comments", async (req: Request, res: Response): Promise<void> => {
-	try {
-		const { author, content } = req.body;
-		const newComment = new CommentModel({ author, content });
-		await newComment.save(); // Salvăm documentul în MongoDB
 
+app.post("/api/comments", async (req: Request<{}, {}, CommentRequest>, res: Response): Promise<void> => {
+	const { author, content } = req.body;
+
+	try {
+		const connection = await mysql.createConnection(dbConfig);
+		const [result] = await connection.execute<ResultSetHeader>({
+			sql: "INSERT INTO comments (author, content) VALUES (?, ?)",
+			values: [author, content],
+		});
+		await connection.end();
 		res.json({ success: true, message: "Comentariu adăugat." });
 	} catch (error: any) {
 		res.status(500).json({ error: error.message });
@@ -138,9 +144,10 @@ app.post("/api/comments", async (req: Request, res: Response): Promise<void> => 
 
 app.get("/api/comments", async (req: Request, res: Response): Promise<void> => {
 	try {
-		// .find() scoate toate documentele, .sort() le ordonează descrescător
-		const comments = await CommentModel.find().sort({ createdAt: -1 });
-		res.json(comments);
+		const connection = await mysql.createConnection(dbConfig);
+		const [rows] = await connection.execute<RowDataPacket[]>("SELECT * FROM comments ORDER BY created_at DESC");
+		await connection.end();
+		res.json(rows);
 	} catch (error: any) {
 		res.status(500).json({ error: error.message });
 	}
@@ -149,32 +156,25 @@ app.get("/api/comments", async (req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------
 // PASUL 4: CRIPTOGRAFIE & GESTIUNE (Creare user cu Hashing)
 // ---------------------------------------------------------
-app.post("/api/users", async (req: Request, res: Response): Promise<void> => {
+app.post("/api/users", async (req: Request<{}, {}, UserRequest>, res: Response): Promise<void> => {
+	const { username, password } = req.body;
+
+	if (!username || !password) {
+		res.status(400).json({ error: "Username și parola sunt obligatorii." });
+		return;
+	}
+
 	try {
-		const { username, password } = req.body;
-
-		if (!username || !password) {
-			res.status(400).json({ error: "Username și parola sunt obligatorii." });
-			return;
-		}
-
 		const saltRounds = 10;
-		const hashedPassword = await bcrypt.hash(String(password), saltRounds);
+		const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-		const newUser = new UserModel({
-			username: String(username),
-			password: hashedPassword,
-		});
+		const connection = await mysql.createConnection(dbConfig);
+		await connection.execute("INSERT INTO users (username, password) VALUES (?, ?)", [username, hashedPassword]);
+		await connection.end();
 
-		await newUser.save();
 		res.json({ success: true, message: "Utilizator creat în siguranță!" });
 	} catch (error: any) {
-		// Prindem eroarea dacă userul există deja (unique: true)
-		if (error.code === 11000) {
-			res.status(400).json({ error: "Acest username este deja folosit." });
-		} else {
-			res.status(500).json({ error: error.message });
-		}
+		res.status(500).json({ error: error.message });
 	}
 });
 
@@ -183,5 +183,5 @@ app.post("/api/users", async (req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------
 const PORT = 5000;
 app.listen(PORT, () => {
-	console.log(`🛡️ Serverul TS+MongoDB rulează pe portul ${PORT}`);
+	console.log(`🛡️ Serverul TS Securify rulează pe portul ${PORT}`);
 });
