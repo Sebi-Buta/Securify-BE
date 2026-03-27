@@ -1,7 +1,7 @@
 import express, { type Request, type Response } from "express";
 import cors from "cors";
 import mysql, { type RowDataPacket } from "mysql2/promise";
-import { type ResultSetHeader } from "mysql2";
+import { type QueryResult, type ResultSetHeader } from "mysql2";
 import bcrypt from "bcrypt";
 
 const app = express();
@@ -154,8 +154,10 @@ app.get("/api/comments", async (req: Request, res: Response): Promise<void> => {
 });
 
 // ---------------------------------------------------------
-// PASUL 4: CRIPTOGRAFIE & GESTIUNE (Creare user cu Hashing)
+// PASUL 4: CRIPTOGRAFIE & GESTIUNE (Criere user cu Hashing)
 // ---------------------------------------------------------
+
+// A. Criere utilizator (Stochează atât parola plain cât și hash-ul)
 app.post("/api/users", async (req: Request<{}, {}, UserRequest>, res: Response): Promise<void> => {
 	const { username, password } = req.body;
 
@@ -169,10 +171,84 @@ app.post("/api/users", async (req: Request<{}, {}, UserRequest>, res: Response):
 		const hashedPassword = await bcrypt.hash(password, saltRounds);
 
 		const connection = await mysql.createConnection(dbConfig);
-		await connection.execute("INSERT INTO users (username, password) VALUES (?, ?)", [username, hashedPassword]);
+		const count = await connection.execute<QueryResult>("SELECT COUNT(*) FROM users");
+		// Stochează atât password-ul plain cât și hash-ul
+		await connection.execute("INSERT INTO users (id, username, password, password_plain) VALUES (?, ?, ?, ?)", [
+			Number(count) + 1,
+			username,
+			hashedPassword,
+			password, // Stochează și parola plain
+		]);
 		await connection.end();
 
 		res.json({ success: true, message: "Utilizator creat în siguranță!" });
+	} catch (error: any) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// B. Obține toți utilizatorii
+app.get("/api/users", async (req: Request, res: Response): Promise<void> => {
+	try {
+		const connection = await mysql.createConnection(dbConfig);
+		const [rows] = await connection.execute<RowDataPacket[]>("SELECT id, username, password, password_plain FROM users");
+		await connection.end();
+
+		res.json(rows);
+	} catch (error: any) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// C. Șterge un utilizator
+app.delete("/api/users/:id", async (req: Request, res: Response): Promise<void> => {
+	const { id } = req.params;
+
+	if (!id) {
+		res.status(400).json({ error: "ID-ul utilizatorului este obligatoriu." });
+		return;
+	}
+
+	try {
+		const connection = await mysql.createConnection(dbConfig);
+		const [result] = await connection.execute<ResultSetHeader>("DELETE FROM users WHERE id = ?", [id]);
+		await connection.end();
+
+		if ((result as any).affectedRows === 0) {
+			res.status(404).json({ error: "Utilizatorul nu a fost găsit." });
+			return;
+		}
+
+		res.json({ success: true, message: "Utilizator șters cu succes!" });
+	} catch (error: any) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// ---------------------------------------------------------
+// PASUL 5: ȘTERGERE COMENTARII
+// ---------------------------------------------------------
+
+// Șterge un comentariu
+app.delete("/api/comments/:id", async (req: Request, res: Response): Promise<void> => {
+	const { id } = req.params;
+
+	if (!id) {
+		res.status(400).json({ error: "ID-ul comentariului este obligatoriu." });
+		return;
+	}
+
+	try {
+		const connection = await mysql.createConnection(dbConfig);
+		const [result] = await connection.execute<ResultSetHeader>("DELETE FROM comments WHERE id = ?", [id]);
+		await connection.end();
+
+		if ((result as any).affectedRows === 0) {
+			res.status(404).json({ error: "Comentariul nu a fost găsit." });
+			return;
+		}
+
+		res.json({ success: true, message: "Comentariu șters cu succes!" });
 	} catch (error: any) {
 		res.status(500).json({ error: error.message });
 	}
