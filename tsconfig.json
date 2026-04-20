@@ -12,6 +12,9 @@
 		"verbatimModuleSyntax": true,
 		"target": "esnext",
 		"types": [],
+		"outDir": "./dist",
+		"rootDir": "./",
+		"esModuleInterop": true,
 		// For nodejs:
 		// "lib": ["esnext"],
 		// "types": ["node"],
