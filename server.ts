@@ -7,7 +7,16 @@ import * as dotenv from "dotenv";
 
 const app = express();
 
-app.use(cors());
+app.use(
+	cors({
+		origin: [
+			"http://localhost:5173", // For local testing
+			"https://securify-fe.vercel.app/", // Your live Frontend URL
+		],
+		methods: ["GET", "POST", "PUT", "DELETE"],
+		credentials: true,
+	}),
+);
 app.use(express.json());
 
 dotenv.config();
