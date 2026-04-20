@@ -3,11 +3,14 @@ import cors from "cors";
 import mysql, { type RowDataPacket } from "mysql2/promise";
 import { type QueryResult, type ResultSetHeader } from "mysql2";
 import bcrypt from "bcrypt";
+import * as dotenv from "dotenv";
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+dotenv.config();
 
 // ---------------------------------------------------------
 // DEFINIREA TIPURILOR DE DATE (Interfețe)
@@ -33,10 +36,13 @@ interface UserRequest {
 // CONEXIUNEA LA BAZA DE DATE
 // ---------------------------------------------------------
 const dbConfig: mysql.ConnectionOptions = {
-	host: "localhost",
-	user: "root",
-	password: "",
-	database: "securify_db",
+	uri: process.env.DATABASE_URL || "", // Used for Aiven
+	host: process.env.DB_HOST || "localhost", // Fallback for local
+	user: process.env.DB_USER || "root",
+	password: process.env.DB_PASSWORD || "",
+	database: process.env.DB_NAME || "securify_db",
+	port: Number(process.env.DB_PORT) || 3306,
+	// ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : "",
 };
 
 // ---------------------------------------------------------
@@ -171,10 +177,8 @@ app.post("/api/users", async (req: Request<{}, {}, UserRequest>, res: Response):
 		const hashedPassword = await bcrypt.hash(password, saltRounds);
 
 		const connection = await mysql.createConnection(dbConfig);
-		const count = await connection.execute<QueryResult>("SELECT COUNT(*) FROM users");
 		// Stochează atât password-ul plain cât și hash-ul
-		await connection.execute("INSERT INTO users (id, username, password, password_plain) VALUES (?, ?, ?, ?)", [
-			Number(count) + 1,
+		await connection.execute("INSERT INTO users ( username, password, password_plain) VALUES ( ?, ?, ?)", [
 			username,
 			hashedPassword,
 			password, // Stochează și parola plain

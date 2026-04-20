@@ -12,11 +12,13 @@
 	"dependencies": {
 		"bcrypt": "^6.0.0",
 		"cors": "^2.8.6",
+		"dotenv": "^17.4.2",
 		"express": "^5.2.1",
 		"mysql2": "^3.18.2"
 	},
 	"scripts": {
-		"start": "ts-node server.ts",
+		"build": "tsc",
+		"start": "node dist/server.js",
 		"dev": "nodemon --exec ts-node server.ts"
 	}
 }
